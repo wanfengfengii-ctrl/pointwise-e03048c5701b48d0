@@ -1,0 +1,24 @@
+{
+  "recording_id": "chenghe-bench-day",
+  "shift_id": "day",
+  "ranges": ["low", "high"],
+  "initial_range": "low",
+  "capacity": 2,
+  "trigger_names": ["trigger-A", "trigger-B", "trigger-C"],
+  "actions": [
+    {"action": "register", "order_id": "A", "range": "low", "revision": "L1", "gain": "1/6", "offset": "-1/6"},
+    {"action": "advance"},
+    {"action": "cancel", "order_id": "A"},
+    {"action": "register", "order_id": "C", "range": "high", "revision": "H1", "gain": "1/4", "offset": "-1"},
+    {"action": "register", "order_id": "B", "range": "low", "revision": "L1", "gain": "1/6", "offset": "-1/6"},
+    {"action": "advance"},
+    {"action": "event", "event": {"kind": "exposure", "step": 1, "trigger_id": "trigger-B"}},
+    {"action": "event", "event": {"kind": "completed", "step": 2, "trigger_id": "trigger-B", "slot": 1, "exposure_step": 1, "raw_code": 5}},
+    {"action": "event", "event": {"kind": "exposure", "step": 3, "trigger_id": "trigger-A"}},
+    {"action": "event", "event": {"kind": "completed", "step": 4, "trigger_id": "trigger-A", "slot": 0, "exposure_step": 3, "raw_code": 9}},
+    {"action": "event", "event": {"kind": "range_applied", "step": 5, "command_id": 1, "range_name": "high"}},
+    {"action": "event", "event": {"kind": "exposure", "step": 6, "trigger_id": "trigger-C"}},
+    {"action": "event", "event": {"kind": "replay", "step": 7, "of_step": 4}},
+    {"action": "event", "event": {"kind": "completed", "step": 8, "trigger_id": "trigger-C", "slot": 0, "exposure_step": 6, "raw_code": 4}}
+  ]
+}
