@@ -4,9 +4,15 @@ from dataclasses import asdict, dataclass
 from capture.events import Completed, DeviceEvent, Exposure, RangeApplied, Stopped, decode_device_event
 
 
+_NOTIFICATION_KINDS = frozenset((
+    'range_applied', 'exposure', 'completed', 'stop_accepted', 'stopped', 'replay',
+))
+
+
 @dataclass(slots=True)
 class _Arm:
     slot: int
+    range_name: str
     stop_requested: bool = False
     live: bool = True
 
@@ -33,6 +39,9 @@ class RecordedDevice:
         self._events: dict[int, DeviceEvent] = {}
         self._last_step = 0
         self._trace: list[dict] = []
+        self._handover = False
+        self._mailbox: list[DeviceEvent] = []
+        self._confirmed = 0
 
     @property
     def trace(self) -> tuple[dict, ...]:
@@ -56,7 +65,7 @@ class RecordedDevice:
     def arm(self, slot: int) -> str:
         trigger_id = self.check_arm(slot)
         self._next_name += 1
-        self._arms[trigger_id] = _Arm(slot)
+        self._arms[trigger_id] = _Arm(slot, self.actual_range)
         self._active_slots[slot] = trigger_id
         self._trace.append({
             'kind': 'arm', 'trigger_id': trigger_id, 'slot': slot, 'range_name': self.actual_range,
@@ -70,6 +79,53 @@ class RecordedDevice:
         armed.stop_requested = True
         self._trace.append({'kind': 'request_stop', 'trigger_id': trigger_id, 'slot': armed.slot})
         return True
+
+    def enable_handover(self) -> None:
+        """Turn on the handover delivery ports before the first duty command."""
+        self._handover = True
+
+    def delivery_state(self) -> dict:
+        live = tuple(sorted(
+            (trigger_id, armed.slot, armed.range_name, armed.stop_requested)
+            for trigger_id, armed in self._arms.items() if armed.live
+        ))
+        return {
+            'recording_id': self.recording_id,
+            'actual_range': self.actual_range,
+            'pending_range': self._pending_range,
+            'live': live,
+            'confirmed': self._confirmed,
+            'tail': self._confirmed + len(self._mailbox),
+        }
+
+    def _check_position(self, position: int) -> None:
+        if type(position) is not int or not self._confirmed <= position <= self._confirmed + len(self._mailbox):
+            raise ValueError(
+                f'position must be between confirmed {self._confirmed} and tail {self._confirmed + len(self._mailbox)}'
+            )
+
+    def read_notices(self, after: int) -> tuple[tuple[int, DeviceEvent], ...]:
+        self._check_position(after)
+        return tuple(
+            (self._confirmed + index + 1, event)
+            for index, event in enumerate(self._mailbox[after - self._confirmed:])
+        )
+
+    def confirm_notices(self, through: int) -> int:
+        self._check_position(through)
+        consumed = through - self._confirmed
+        recycled_steps = {event.step for event in self._mailbox[:consumed]}
+        del self._mailbox[:consumed]
+        self._confirmed = through
+        if self._handover and recycled_steps:
+            # Confirmed business payloads are recycled. The recording command
+            # trajectory (arms, requests, stops) stays available for diagnosis;
+            # confirmed notification events can no longer be fetched from it.
+            self._trace = [
+                entry for entry in self._trace
+                if not (entry.get('kind') in _NOTIFICATION_KINDS and entry.get('step') in recycled_steps)
+            ]
+        return through
 
     def _observe(self, event: DeviceEvent) -> None:
         if isinstance(event, RangeApplied):
@@ -95,6 +151,8 @@ class RecordedDevice:
             event = self._events.get(original_step) if type(original_step) is int else None
             if event is None or isinstance(event, Exposure):
                 raise ValueError('replay requires an earlier non-exposure notification')
+            if self._handover and not any(notice.step == original_step for notice in self._mailbox):
+                raise ValueError('replay cannot retrieve a recycled notice')
             trace_entry = {'kind': kind, 'step': step, 'of_step': original_step}
         else:
             if kind == 'exposure':
@@ -109,4 +167,6 @@ class RecordedDevice:
         self._last_step = step
         self._events[step] = event
         self._trace.append(trace_entry)
+        if self._handover:
+            self._mailbox.append(event)
         return event

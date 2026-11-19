@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+from control.handover_store import initialize_handover
 from jobs.orders import initialize_orders
 
 
@@ -51,3 +52,4 @@ def initialize_archive(connection: sqlite3.Connection) -> None:
                 FOREIGN KEY (sample_id, shift_id, order_id) REFERENCES samples(sample_id, shift_id, order_id)
             )
         ''')
+        initialize_handover(connection)

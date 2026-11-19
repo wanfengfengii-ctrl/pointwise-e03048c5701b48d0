@@ -14,31 +14,44 @@ def sample_id_for(shift_id: str, order_id: str) -> str:
 
 def publish_sample(book: OrderBook, candidate: SampleCandidate) -> ArchivedSample | None:
     connection = book.connection
-    order = candidate.order
     connection.execute('BEGIN IMMEDIATE')
     with connection:
-        current = book.get_order(order.shift_id, order.order_id)
-        if current.status != OrderStatus.CAPTURING:
-            return None
-        if current != order:
-            raise ValueError('candidate does not match the current frozen order')
-        exposure = candidate.exposure
-        checked_voltage = convert_voltage(candidate.raw_code, current.calibration, exposure.range_name)
-        if checked_voltage != candidate.voltage:
-            raise ValueError('candidate voltage does not match the frozen calibration')
-        sample_id = sample_id_for(current.shift_id, current.order_id)
-        sample = SampleRecord(
-            sample_id, current.shift_id, current.order_id, current.sequence,
-            candidate.raw_code, current.calibration, checked_voltage, exposure,
-        )
-        receipt = issue_receipt(sample_id, current.shift_id, current.order_id)
-        connection.execute('''
-            INSERT INTO samples (
-                sample_id, shift_id, order_id, trigger_id, raw_code, actual_range, revision,
-                gain_n, gain_d, offset_n, offset_d, voltage_n, voltage_d, recording_id, exposure_step, slot
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', encode_sample(sample))
-        save_receipt(connection, receipt)
-        if not mark_succeeded(book, current.shift_id, current.order_id):
-            raise RuntimeError('order lost publication eligibility during the transaction')
+        archived = publish_sample_transaction(book, candidate)
+    return archived
+
+
+def publish_sample_transaction(book: OrderBook, candidate: SampleCandidate) -> ArchivedSample | None:
+    """Publish inside an already-open archive transaction.
+
+    Used by the handover flow so the sample, receipt, order state and recovery
+    evidence share one durable transaction before the device confirms notices.
+    """
+    connection = book.connection
+    if not connection.in_transaction:
+        raise RuntimeError('success requires an archive transaction')
+    order = candidate.order
+    current = book.get_order(order.shift_id, order.order_id)
+    if current.status != OrderStatus.CAPTURING:
+        return None
+    if current != order:
+        raise ValueError('candidate does not match the current frozen order')
+    exposure = candidate.exposure
+    checked_voltage = convert_voltage(candidate.raw_code, current.calibration, exposure.range_name)
+    if checked_voltage != candidate.voltage:
+        raise ValueError('candidate voltage does not match the frozen calibration')
+    sample_id = sample_id_for(current.shift_id, current.order_id)
+    sample = SampleRecord(
+        sample_id, current.shift_id, current.order_id, current.sequence,
+        candidate.raw_code, current.calibration, checked_voltage, exposure,
+    )
+    receipt = issue_receipt(sample_id, current.shift_id, current.order_id)
+    connection.execute('''
+        INSERT INTO samples (
+            sample_id, shift_id, order_id, trigger_id, raw_code, actual_range, revision,
+            gain_n, gain_d, offset_n, offset_d, voltage_n, voltage_d, recording_id, exposure_step, slot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', encode_sample(sample))
+    save_receipt(connection, receipt)
+    if not mark_succeeded(book, current.shift_id, current.order_id):
+        raise RuntimeError('order lost publication eligibility during the transaction')
     return ArchivedSample(sample, receipt)

@@ -2,6 +2,6 @@
   "version": 1,
   "kind": "cli",
   "setup": [],
-  "verify": ["python3", "-B", "check_project.py"],
-  "demo": ["python3", "-B", "-m", "control.dispatch", "samples/day.json"]
+  "verify": ["python3", "-B", "handover_case.py", "verify"],
+  "demo": ["python3", "-B", "handover_case.py", "demo"]
 }
